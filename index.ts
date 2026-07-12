@@ -2,6 +2,8 @@ import express, { Request, Response } from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import { MongoClient } from "mongodb";
+import { toNodeHandler } from "better-auth/node";
+import { auth } from "./auth";
 
 dotenv.config();
 
@@ -9,7 +11,15 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 const MONGODB_URI = process.env.MONGODB_URI as string;
 
-app.use(cors());
+app.use(
+  cors({
+    origin: process.env.CLIENT_URL,
+    credentials: true,
+  })
+);
+
+app.all("/api/auth/*any", toNodeHandler(auth));
+
 app.use(express.json());
 
 const client = new MongoClient(MONGODB_URI);
