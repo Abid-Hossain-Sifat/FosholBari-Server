@@ -1,7 +1,7 @@
 import express, { Request, Response } from "express";
 import cors from "cors";
 import dotenv from "dotenv";
-import { MongoClient } from "mongodb";
+import { MongoClient, ObjectId } from "mongodb";
 import { toNodeHandler } from "better-auth/node";
 import { auth } from "./auth";
 
@@ -24,23 +24,48 @@ app.use(express.json());
 
 const client = new MongoClient(MONGODB_URI);
 
-async function run() {
+const run = async () => {
   try {
     await client.connect();
-    console.log("MongoDB connected successfully");
-
     const db = client.db("FosholBari");
+    const Exp = db.collection("explore");
 
-    app.get("/", (req: Request, res: Response) => {
-      res.send("Server is running");
+    app.get("/explore", async (req: Request, res: Response) => {
+      const cursor = Exp.find();
+      const final = await cursor.toArray();
+      res.send(final);
     });
 
-    app.listen(PORT, () => {
-      console.log(`Server running on port ${PORT}`);
-    });
+    app.get("/explore/:id", async (req: Request<{ id: string }>, res: Response) => {
+        try {
+          const item = await Exp.findOne({
+            _id: new ObjectId(req.params.id),
+          });
+
+          if (!item) {
+            return res.status(404).send({ message: "Product not found" });
+          }
+
+          res.send(item);
+        } catch (error) {
+          res.status(400).send({ message: "Invalid ID" });
+        }
+      }
+    );
+
+    await client.db("admin").command({ ping: 1 });
+    console.log("ping Deployed");
   } catch (error) {
-    console.error("MongoDB connection failed:", error);
+    console.error(error);
   }
-}
+};
 
 run();
+
+app.get("/", (req: Request, res: Response) => {
+  res.send("Server is running");
+});
+
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
