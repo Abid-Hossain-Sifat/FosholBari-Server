@@ -581,7 +581,7 @@ const run = async () => {
     });
 
     await client.db("admin").command({ ping: 1 });
-    console.log("✅ MongoDB Connected — FosholBari");
+    console.log("MongoDB Connected — FosholBari");
   } catch (error) {
     console.error(error);
   }
@@ -590,9 +590,9 @@ const run = async () => {
 run();
 
 app.get("/", (_req: Request, res: Response) => {
-  res.send("FosholBari Server is running 🌾");
+  res.send("FosholBari Server is running");
 });
 
 app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`Server running on port ${PORT}`);
 });
