@@ -1,5 +1,6 @@
 import { betterAuth } from "better-auth";
 import { mongodbAdapter } from "better-auth/adapters/mongodb";
+import { jwt, bearer } from "better-auth/plugins";
 import { MongoClient } from "mongodb";
 import dotenv from "dotenv";
 
@@ -40,4 +41,12 @@ export const auth = betterAuth({
             },
         },
     },
+    plugins: [
+        bearer(),
+        jwt({
+            jwt: {
+                expirationTime: "7d",
+            },
+        }),
+    ],
 });
