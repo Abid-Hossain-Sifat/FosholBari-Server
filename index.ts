@@ -716,6 +716,169 @@ const run = async () => {
       }
     });
 
+    // ══════════════════════════════════════════════════════════════════
+    // ADMIN
+    // ══════════════════════════════════════════════════════════════════
+
+    const adminGuard = async (req: Request) => {
+      const session = await getSession(req);
+      if (!session?.user) return null;
+      const role = (session.user as { role?: string }).role;
+      if (role !== "Admin") return null;
+      return session;
+    };
+
+    // GET /stats/admin — admin dashboard overview
+    app.get("/stats/admin", async (_req: Request, res: Response) => {
+      try {
+        const Users = db.collection("user");
+        const [totalUsers, totalProducts, totalOrders, totalDemands, revenueResult, pendingOrders] =
+          await Promise.all([
+            Users.countDocuments(),
+            Exp.countDocuments(),
+            Orders.countDocuments(),
+            Demands.countDocuments(),
+            Orders.aggregate([
+              { $match: { status: "Delivered" } },
+              { $group: { _id: null, total: { $sum: "$total" } } },
+            ]).toArray(),
+            Orders.countDocuments({ status: "Pending" }),
+          ]);
+        res.send({
+          totalUsers,
+          totalProducts,
+          totalOrders,
+          totalDemands,
+          totalRevenue: revenueResult[0]?.total || 0,
+          pendingOrders,
+        });
+      } catch {
+        res.status(500).send({ message: "Internal Server Error" });
+      }
+    });
+
+    // GET /admin/users — list all users
+    app.get("/admin/users", async (req: Request, res: Response) => {
+      try {
+        const session = await adminGuard(req);
+        if (!session) return res.status(401).send({ message: "Unauthorized" });
+        const Users = db.collection("user");
+        const users = await Users.find({}).project({ password: 0 }).toArray();
+        res.send(users);
+      } catch {
+        res.status(500).send({ message: "Internal Server Error" });
+      }
+    });
+
+    // PATCH /admin/users/:id — update user role
+    app.patch("/admin/users/:id", async (req: Request<{ id: string }>, res: Response) => {
+      try {
+        const session = await adminGuard(req);
+        if (!session) return res.status(401).send({ message: "Unauthorized" });
+        const { role } = req.body;
+        if (!["Buyer", "Farmer", "Admin"].includes(role)) {
+          return res.status(400).send({ message: "Invalid role" });
+        }
+        const Users = db.collection("user");
+        const result = await Users.findOneAndUpdate(
+          { _id: new ObjectId(req.params.id) },
+          { $set: { role } },
+          { returnDocument: "after", projection: { password: 0 } }
+        );
+        if (!result) return res.status(404).send({ message: "User not found" });
+        res.send(result);
+      } catch {
+        res.status(500).send({ message: "Internal Server Error" });
+      }
+    });
+
+    // DELETE /admin/users/:id
+    app.delete("/admin/users/:id", async (req: Request<{ id: string }>, res: Response) => {
+      try {
+        const session = await adminGuard(req);
+        if (!session) return res.status(401).send({ message: "Unauthorized" });
+        const Users = db.collection("user");
+        const result = await Users.deleteOne({ _id: new ObjectId(req.params.id) });
+        if (result.deletedCount === 0) return res.status(404).send({ message: "User not found" });
+        res.send({ message: "User deleted" });
+      } catch {
+        res.status(500).send({ message: "Internal Server Error" });
+      }
+    });
+
+    // GET /admin/orders — all orders
+    app.get("/admin/orders", async (req: Request, res: Response) => {
+      try {
+        const session = await adminGuard(req);
+        if (!session) return res.status(401).send({ message: "Unauthorized" });
+        const orders = await Orders.find({}).sort({ createdAt: -1 }).toArray();
+        res.send(orders);
+      } catch {
+        res.status(500).send({ message: "Internal Server Error" });
+      }
+    });
+
+    // PATCH /admin/orders/:id — update any order status
+    app.patch("/admin/orders/:id", async (req: Request<{ id: string }>, res: Response) => {
+      try {
+        const session = await adminGuard(req);
+        if (!session) return res.status(401).send({ message: "Unauthorized" });
+        const { status } = req.body;
+        const allowedStatuses = ["Pending", "Shipped", "Delivered", "Cancelled"];
+        if (!allowedStatuses.includes(status)) {
+          return res.status(400).send({ message: "Invalid status" });
+        }
+        const result = await Orders.findOneAndUpdate(
+          { _id: new ObjectId(req.params.id) },
+          { $set: { status, updatedAt: new Date() } },
+          { returnDocument: "after" }
+        );
+        if (!result) return res.status(404).send({ message: "Order not found" });
+        res.send(result);
+      } catch {
+        res.status(500).send({ message: "Internal Server Error" });
+      }
+    });
+
+    // DELETE /admin/orders/:id
+    app.delete("/admin/orders/:id", async (req: Request<{ id: string }>, res: Response) => {
+      try {
+        const session = await adminGuard(req);
+        if (!session) return res.status(401).send({ message: "Unauthorized" });
+        const result = await Orders.deleteOne({ _id: new ObjectId(req.params.id) });
+        if (result.deletedCount === 0) return res.status(404).send({ message: "Order not found" });
+        res.send({ message: "Order deleted" });
+      } catch {
+        res.status(500).send({ message: "Internal Server Error" });
+      }
+    });
+
+    // DELETE /admin/explore/:id — delete any product
+    app.delete("/admin/explore/:id", async (req: Request<{ id: string }>, res: Response) => {
+      try {
+        const session = await adminGuard(req);
+        if (!session) return res.status(401).send({ message: "Unauthorized" });
+        const result = await Exp.deleteOne({ _id: new ObjectId(req.params.id) });
+        if (result.deletedCount === 0) return res.status(404).send({ message: "Product not found" });
+        res.send({ message: "Product deleted" });
+      } catch {
+        res.status(500).send({ message: "Internal Server Error" });
+      }
+    });
+
+    // DELETE /admin/demands/:id — delete any demand
+    app.delete("/admin/demands/:id", async (req: Request<{ id: string }>, res: Response) => {
+      try {
+        const session = await adminGuard(req);
+        if (!session) return res.status(401).send({ message: "Unauthorized" });
+        const result = await Demands.deleteOne({ _id: new ObjectId(req.params.id) });
+        if (result.deletedCount === 0) return res.status(404).send({ message: "Demand not found" });
+        res.send({ message: "Demand deleted" });
+      } catch {
+        res.status(500).send({ message: "Internal Server Error" });
+      }
+    });
+
     await client.db("admin").command({ ping: 1 });
     console.log("MongoDB Connected — FosholBari");
   } catch (error) {
