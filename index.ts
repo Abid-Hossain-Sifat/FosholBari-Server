@@ -49,7 +49,7 @@ const run = async () => {
     // GET /explore  — public list with filter + pagination
     app.get("/explore", async (req: Request, res: Response) => {
       try {
-        const { categories, tags, maxPrice, sort, page, limit, farmerId } =
+        const { categories, tags, maxPrice, sort, page, limit, farmerId, search } =
           req.query as Record<string, string>;
 
         const PAGE_LIMIT = limit ? Math.max(1, Number(limit)) : 6;
@@ -65,6 +65,15 @@ const run = async () => {
         if (maxPrice) {
           const p = Number(maxPrice);
           if (!isNaN(p)) query.price = { $lte: p };
+        }
+
+        if (search?.trim()) {
+          const searchRegex = { $regex: search.trim(), $options: "i" };
+          query.$or = [
+            { name: searchRegex },
+            { category: searchRegex },
+            { tag: searchRegex },
+          ];
         }
 
         const sortQuery: any =
@@ -242,37 +251,56 @@ const run = async () => {
       }
     });
 
-    // POST /orders  — buyer places order
+    // POST /orders  — buyer places order (Buyer role only)
     app.post("/orders", async (req: Request, res: Response) => {
       try {
         const session = await getSession(req);
         if (!session?.user) return res.status(401).send({ message: "Unauthorized" });
 
-        const {
-          productId,
-          productName,
-          farmerId,
-          farmerName,
-          qty,
-          price,
-          address,
-          phone,
-        } = req.body;
+        const userRole = (session.user as { role?: string }).role;
+        if (userRole !== "Buyer") {
+          return res.status(403).send({
+            message: "শুধুমাত্র ক্রেতা পণ্য কিনতে পারবেন।",
+          });
+        }
+
+        const { productId, qty, weight, address, phone } = req.body;
+        if (!productId) {
+          return res.status(400).send({ message: "productId required" });
+        }
+
+        let product;
+        try {
+          product = await Exp.findOne({ _id: new ObjectId(productId) });
+        } catch {
+          return res.status(400).send({ message: "Invalid product ID" });
+        }
+        if (!product) {
+          return res.status(404).send({ message: "Product not found" });
+        }
+
+        const quantity = Math.max(1, Number(qty) || 1);
+        const unitPrice = Number(product.price) || 0;
+        const profile = await Profiles.findOne({ userId: session.user.id });
 
         const order = {
           buyerId: session.user.id,
-          buyerName: session.user.name,
-          farmerId: farmerId || "",
-          farmerName: farmerName || "",
-          productId: productId || "",
-          productName: productName || "",
-          qty: Number(qty),
-          price: Number(price),
-          total: Number(price) * Number(qty),
-          address: address || "",
-          phone: phone || "",
+          buyerName: session.user.name || "",
+          farmerId: product.farmerId || "",
+          farmerName: product.farmerName || "",
+          productId: String(product._id),
+          productName: product.name || "",
+          productImage: product.image || "",
+          unit: product.unit || "",
+          weight: weight || product.unit || "",
+          qty: quantity,
+          price: unitPrice,
+          total: unitPrice * quantity,
+          address: address || profile?.location || "",
+          phone: phone || profile?.phone || (session.user as { phoneNumber?: string }).phoneNumber || "",
           status: "Pending",
           createdAt: new Date(),
+          updatedAt: new Date(),
         };
 
         const result = await Orders.insertOne(order);
@@ -282,7 +310,7 @@ const run = async () => {
       }
     });
 
-    // PATCH /orders/:id  — update status (farmer updates; buyer can cancel)
+    // PATCH /orders/:id  — farmer updates status for their orders
     app.patch(
       "/orders/:id",
       async (req: Request<{ id: string }>, res: Response) => {
@@ -290,9 +318,37 @@ const run = async () => {
           const session = await getSession(req);
           if (!session?.user) return res.status(401).send({ message: "Unauthorized" });
 
+          const userRole = (session.user as { role?: string }).role;
           const { status } = req.body;
+          const allowedStatuses = ["Pending", "Shipped", "Delivered", "Cancelled"];
+          if (!allowedStatuses.includes(status)) {
+            return res.status(400).send({ message: "Invalid status" });
+          }
+
+          let orderId: ObjectId;
+          try {
+            orderId = new ObjectId(req.params.id);
+          } catch {
+            return res.status(400).send({ message: "Invalid order ID" });
+          }
+
+          const existing = await Orders.findOne({ _id: orderId });
+          if (!existing) return res.status(404).send({ message: "Order not found" });
+
+          if (userRole === "Farmer") {
+            if (existing.farmerId !== session.user.id) {
+              return res.status(403).send({ message: "Not your order" });
+            }
+          } else if (userRole === "Buyer") {
+            if (existing.buyerId !== session.user.id || status !== "Cancelled") {
+              return res.status(403).send({ message: "Buyers can only cancel their orders" });
+            }
+          } else {
+            return res.status(403).send({ message: "Forbidden" });
+          }
+
           const result = await Orders.findOneAndUpdate(
-            { _id: new ObjectId(req.params.id) },
+            { _id: orderId },
             { $set: { status, updatedAt: new Date() } },
             { returnDocument: "after" }
           );
@@ -310,13 +366,41 @@ const run = async () => {
 
     app.get("/demands", async (req: Request, res: Response) => {
       try {
-        const session = await getSession(req);
-        if (!session?.user) return res.status(401).send({ message: "Unauthorized" });
+        const { my } = req.query;
+        const Users = db.collection("user");
+        const Profiles = db.collection("profiles");
 
-        const demands = await Demands.find({ buyerId: session.user.id })
-          .sort({ createdAt: -1 })
-          .toArray();
-        res.send(demands);
+        let demandsList = [];
+        if (my === "true") {
+          const session = await getSession(req);
+          if (!session?.user) return res.status(401).send({ message: "Unauthorized" });
+
+          demandsList = await Demands.find({ buyerId: session.user.id })
+            .sort({ createdAt: -1 })
+            .toArray();
+        } else {
+          demandsList = await Demands.find({})
+            .sort({ createdAt: -1 })
+            .toArray();
+        }
+
+        const hydratedDemands = await Promise.all(
+          demandsList.map(async (demand) => {
+            try {
+              const buyer = await Users.findOne({ _id: new ObjectId(demand.buyerId) });
+              const profile = await Profiles.findOne({ userId: demand.buyerId });
+              return {
+                ...demand,
+                buyerName: buyer?.name || demand.buyerName || "অজ্ঞাত ক্রেতা",
+                location: profile?.location || demand.location || "অজ্ঞাত স্থান",
+              };
+            } catch {
+              return demand;
+            }
+          })
+        );
+
+        res.send(hydratedDemands);
       } catch {
         res.status(500).send({ message: "Internal Server Error" });
       }
@@ -327,15 +411,24 @@ const run = async () => {
         const session = await getSession(req);
         if (!session?.user) return res.status(401).send({ message: "Unauthorized" });
 
-        const { crop, qty, budget, deadline, description } = req.body;
-        if (!crop || !qty)
-          return res.status(400).send({ message: "crop and qty required" });
+        const { crop, qty, budget, deadline, description, productName, quantity, location: bodyLocation } = req.body;
+        const finalCrop = crop || productName;
+        const finalQty = qty || quantity;
+
+        if (!finalCrop || !finalQty)
+          return res.status(400).send({ message: "crop/productName and qty/quantity required" });
+
+        const profile = await Profiles.findOne({ userId: session.user.id });
+        const location = bodyLocation || profile?.location || "";
 
         const demand = {
           buyerId: session.user.id,
           buyerName: session.user.name,
-          crop,
-          qty,
+          location,
+          productName: finalCrop,
+          crop: finalCrop,
+          quantity: finalQty,
+          qty: finalQty,
           budget: budget || "",
           deadline: deadline || "",
           description: description || "",
@@ -350,6 +443,49 @@ const run = async () => {
         res.status(500).send({ message: "Internal Server Error" });
       }
     });
+
+    app.post(
+      "/demands/:id/comments",
+      async (req: Request<{ id: string }>, res: Response) => {
+        try {
+          const session = await getSession(req);
+          if (!session?.user) return res.status(401).send({ message: "Unauthorized" });
+
+          const userRole = (session.user as { role?: string }).role;
+          if (userRole !== "Farmer") {
+            return res.status(403).send({ message: "শুধুমাত্র কৃষকরা প্রস্তাব বা মন্তব্য করতে পারবেন।" });
+          }
+
+          const { text } = req.body;
+          if (!text || !text.trim()) {
+            return res.status(400).send({ message: "Comment text is required" });
+          }
+
+          const newComment = {
+            id: new ObjectId().toString(),
+            authorId: session.user.id,
+            authorName: session.user.name,
+            authorRole: "farmer",
+            text: text.trim(),
+            time: new Date(),
+          };
+
+          const result = await Demands.findOneAndUpdate(
+            { _id: new ObjectId(req.params.id) },
+            { 
+              $push: { comments: newComment } as any,
+              $inc: { responses: 1 }
+            },
+            { returnDocument: "after" }
+          );
+
+          if (!result) return res.status(404).send({ message: "Demand not found" });
+          res.send(result);
+        } catch {
+          res.status(500).send({ message: "Internal Server Error" });
+        }
+      }
+    );
 
     app.patch(
       "/demands/:id",
