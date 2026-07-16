@@ -892,13 +892,7 @@ if (!process.env.VERCEL) {
   });
 }
 
-export default async function handler(req: any, res: any) {
-  try {
-    await ensureDb();
-  } catch (err) {
-    console.error("DB connect failed:", err);
-    if (!res.headersSent) res.status(500).json({ error: "Database connection failed" });
-    return;
-  }
+export default function handler(req: any, res: any) {
+  ensureDb().catch(err => console.error("DB connect failed:", err));
   app.handle(req, res);
 }
