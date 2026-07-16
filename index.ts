@@ -2,12 +2,10 @@ import express, { Request, Response } from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import { MongoClient, ObjectId } from "mongodb";
-import { toNodeHandler } from "better-auth/node";
-import { auth } from "./auth";
+import { getAuth } from "./auth";
 
 dotenv.config();
 
-// Log Vercel environment for diagnostics
 console.log("[BOOT] VERCEL=", process.env.VERCEL, "NODE_ENV=", process.env.NODE_ENV, "hasMongoURI=", !!process.env.MONGODB_URI);
 
 const app = express();
@@ -15,8 +13,6 @@ const PORT = process.env.PORT || 5000;
 const MONGODB_URI = process.env.MONGODB_URI || "mongodb://localhost:27017";
 
 app.use(cors({ origin: process.env.CLIENT_URL, credentials: true }));
-app.all("/api/auth/*any", toNodeHandler(auth));
-app.use(express.json({ limit: "10mb" }));
 
 const client = new MongoClient(MONGODB_URI);
 let dbReady: Promise<any> | null = null;
@@ -34,11 +30,38 @@ const getSession = async (req: Request) => {
         headers.set(key, Array.isArray(value) ? value.join(", ") : value);
       }
     }
-    return await auth.api.getSession({ headers });
+    const theAuth = await getAuth();
+    return await theAuth.api.getSession({ headers });
   } catch {
     return null;
   }
 };
+
+// ─── Auth handler (lazy, uses dynamic import for ESM better-auth/node) ────
+let authHandlerPromise: Promise<any> | null = null;
+async function getAuthHandler() {
+  if (authHandlerPromise) return authHandlerPromise;
+  authHandlerPromise = (async () => {
+    const [nodeMod, theAuth] = await Promise.all([
+      import("better-auth/node"),
+      getAuth(),
+    ]);
+    return nodeMod.toNodeHandler(theAuth);
+  })();
+  return authHandlerPromise;
+}
+
+app.all("/api/auth/*any", async (req: Request, res: Response, next: any) => {
+  try {
+    const handler = await getAuthHandler();
+    handler(req, res, next);
+  } catch (err: any) {
+    console.error("[AUTH-HANDLER-CRASH]", err?.stack || err?.message || err);
+    res.status(500).send("Internal Server Error");
+  }
+});
+
+app.use(express.json({ limit: "10mb" }));
 
 const db = client.db("FosholBari");
 const Exp = db.collection("explore");
@@ -912,7 +935,6 @@ export default function handler(req: any, res: any) {
     }
   }
 
-  // Log completion via response close/finish
   res.on("finish", () => {
     console.log("[DONE]", req.method, req.url, res.statusCode, Date.now() - start, "ms");
   });
