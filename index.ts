@@ -9,13 +9,18 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 5000;
-const MONGODB_URI = process.env.MONGODB_URI as string;
+const MONGODB_URI = process.env.MONGODB_URI || "mongodb://localhost:27017";
 
 app.use(cors({ origin: process.env.CLIENT_URL, credentials: true }));
 app.all("/api/auth/*any", toNodeHandler(auth));
 app.use(express.json({ limit: "10mb" }));
 
 const client = new MongoClient(MONGODB_URI);
+let dbReady: Promise<void> | null = null;
+async function ensureDb() {
+  if (!dbReady) dbReady = client.connect().catch(err => { dbReady = null; throw err; });
+  return dbReady;
+}
 
 // ─── Session helper ────────────────────────────────────────────────────────
 const getSession = async (req: Request) => {
@@ -881,9 +886,19 @@ app.get("/", (_req: Request, res: Response) => {
 });
 
 if (!process.env.VERCEL) {
+  ensureDb().catch(console.error);
   app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
   });
 }
 
-export default app;
+export default async function handler(req: any, res: any) {
+  try {
+    await ensureDb();
+  } catch (err) {
+    console.error("DB connect failed:", err);
+    if (!res.headersSent) res.status(500).json({ error: "Database connection failed" });
+    return;
+  }
+  app.handle(req, res);
+}
