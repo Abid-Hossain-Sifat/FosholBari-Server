@@ -10,7 +10,8 @@ const plugins_1 = require("better-auth/plugins");
 const mongodb_2 = require("mongodb");
 const dotenv_1 = __importDefault(require("dotenv"));
 dotenv_1.default.config();
-const client = new mongodb_2.MongoClient(process.env.MONGODB_URI);
+const mongoUri = process.env.MONGODB_URI || "mongodb://localhost:27017";
+const client = new mongodb_2.MongoClient(mongoUri);
 const db = client.db("FosholBari");
 exports.auth = (0, better_auth_1.betterAuth)({
     database: (0, mongodb_1.mongodbAdapter)(db),

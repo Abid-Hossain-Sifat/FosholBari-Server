@@ -19,9 +19,9 @@ app.all("/api/auth/*any", toNodeHandler(auth));
 app.use(express.json({ limit: "10mb" }));
 
 const client = new MongoClient(MONGODB_URI);
-let dbReady: Promise<void> | null = null;
+let dbReady: Promise<any> | null = null;
 async function ensureDb() {
-  if (!dbReady) dbReady = client.connect().catch(err => { dbReady = null; throw err; });
+  if (!dbReady) dbReady = client.connect().catch((err: any) => { dbReady = null; throw err; });
   return dbReady;
 }
 
@@ -904,7 +904,7 @@ export default function handler(req: any, res: any) {
   });
 
   try {
-    app.handle(req, res);
+    (app as any)(req, res);
   } catch (err: any) {
     console.error("[HANDLER-CRASH]", err?.stack || err?.message || err);
     if (!res.headersSent) {

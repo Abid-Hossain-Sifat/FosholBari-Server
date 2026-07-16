@@ -3,6 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.default = handler;
 const express_1 = __importDefault(require("express"));
 const cors_1 = __importDefault(require("cors"));
 const dotenv_1 = __importDefault(require("dotenv"));
@@ -10,13 +11,21 @@ const mongodb_1 = require("mongodb");
 const node_1 = require("better-auth/node");
 const auth_1 = require("./auth");
 dotenv_1.default.config();
+// Log Vercel environment for diagnostics
+console.log("[BOOT] VERCEL=", process.env.VERCEL, "NODE_ENV=", process.env.NODE_ENV, "hasMongoURI=", !!process.env.MONGODB_URI);
 const app = (0, express_1.default)();
 const PORT = process.env.PORT || 5000;
-const MONGODB_URI = process.env.MONGODB_URI;
+const MONGODB_URI = process.env.MONGODB_URI || "mongodb://localhost:27017";
 app.use((0, cors_1.default)({ origin: process.env.CLIENT_URL, credentials: true }));
 app.all("/api/auth/*any", (0, node_1.toNodeHandler)(auth_1.auth));
 app.use(express_1.default.json({ limit: "10mb" }));
 const client = new mongodb_1.MongoClient(MONGODB_URI);
+let dbReady = null;
+async function ensureDb() {
+    if (!dbReady)
+        dbReady = client.connect().catch((err) => { dbReady = null; throw err; });
+    return dbReady;
+}
 // ─── Session helper ────────────────────────────────────────────────────────
 const getSession = async (req) => {
     try {
@@ -786,8 +795,35 @@ app.get("/", (_req, res) => {
     res.send("FosholBari Server is running");
 });
 if (!process.env.VERCEL) {
+    ensureDb().catch(console.error);
     app.listen(PORT, () => {
         console.log(`Server running on port ${PORT}`);
     });
 }
-exports.default = app;
+function handler(req, res) {
+    const start = Date.now();
+    console.log("[REQ]", req.method, req.url);
+    ensureDb().catch((err) => {
+        console.error("[DB-CONNECT-ERROR]", err?.message || err);
+    });
+    try {
+        app(req, res);
+    }
+    catch (err) {
+        console.error("[HANDLER-CRASH]", err?.stack || err?.message || err);
+        if (!res.headersSent) {
+            try {
+                res.statusCode = 500;
+                res.end("Internal Server Error");
+            }
+            catch (_) { }
+        }
+    }
+    // Log completion via response close/finish
+    res.on("finish", () => {
+        console.log("[DONE]", req.method, req.url, res.statusCode, Date.now() - start, "ms");
+    });
+    res.on("close", () => {
+        console.log("[CLOSE]", req.method, req.url, res.statusCode, Date.now() - start, "ms");
+    });
+}
