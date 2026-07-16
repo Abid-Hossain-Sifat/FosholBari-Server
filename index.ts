@@ -7,6 +7,9 @@ import { auth } from "./auth";
 
 dotenv.config();
 
+// Log Vercel environment for diagnostics
+console.log("[BOOT] VERCEL=", process.env.VERCEL, "NODE_ENV=", process.env.NODE_ENV, "hasMongoURI=", !!process.env.MONGODB_URI);
+
 const app = express();
 const PORT = process.env.PORT || 5000;
 const MONGODB_URI = process.env.MONGODB_URI || "mongodb://localhost:27017";
@@ -893,6 +896,27 @@ if (!process.env.VERCEL) {
 }
 
 export default function handler(req: any, res: any) {
-  ensureDb().catch(err => console.error("DB connect failed:", err));
-  app.handle(req, res);
+  const start = Date.now();
+  console.log("[REQ]", req.method, req.url);
+
+  ensureDb().catch((err: any) => {
+    console.error("[DB-CONNECT-ERROR]", err?.message || err);
+  });
+
+  try {
+    app.handle(req, res);
+  } catch (err: any) {
+    console.error("[HANDLER-CRASH]", err?.stack || err?.message || err);
+    if (!res.headersSent) {
+      try { res.statusCode = 500; res.end("Internal Server Error"); } catch (_) {}
+    }
+  }
+
+  // Log completion via response close/finish
+  res.on("finish", () => {
+    console.log("[DONE]", req.method, req.url, res.statusCode, Date.now() - start, "ms");
+  });
+  res.on("close", () => {
+    console.log("[CLOSE]", req.method, req.url, res.statusCode, Date.now() - start, "ms");
+  });
 }
