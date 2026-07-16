@@ -32,15 +32,12 @@ const getSession = async (req: Request) => {
   }
 };
 
-const run = async () => {
-  try {
-    await client.connect();
-    const db = client.db("FosholBari");
-    const Exp = db.collection("explore");
-    const Orders = db.collection("orders");
-    const Demands = db.collection("demands");
-    const BazarNotes = db.collection("bazar_notes");
-    const Profiles = db.collection("profiles");
+const db = client.db("FosholBari");
+const Exp = db.collection("explore");
+const Orders = db.collection("orders");
+const Demands = db.collection("demands");
+const BazarNotes = db.collection("bazar_notes");
+const Profiles = db.collection("profiles");
 
     // ══════════════════════════════════════════════════════════════════
     // EXPLORE / PRODUCTS
@@ -879,19 +876,14 @@ const run = async () => {
       }
     });
 
-    await client.db("admin").command({ ping: 1 });
-    console.log("MongoDB Connected — FosholBari");
-  } catch (error) {
-    console.error(error);
-  }
-};
-
-run();
-
 app.get("/", (_req: Request, res: Response) => {
   res.send("FosholBari Server is running");
 });
 
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
+if (!process.env.VERCEL) {
+  app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+  });
+}
+
+export default app;
